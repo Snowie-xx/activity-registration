@@ -1,0 +1,50 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: activity-registration
+
+  # 真实关系库（MySQL 8 / MariaDB 兼容）。凭据通过环境变量覆盖，代码不含生产凭据。
+  datasource:
+    url: ${DB_URL:jdbc:mysql://localhost:3306/activity_registration?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&connectTimeout=3000&socketTimeout=10000}
+    username: ${DB_USERNAME:root}
+    password: ${DB_PASSWORD:}
+    hikari:
+      maximum-pool-size: 40
+      minimum-idle: 5
+      connection-timeout: 5000
+      validation-timeout: 3000
+      max-lifetime: 600000
+
+  jpa:
+    hibernate:
+      ddl-auto: none            # 表结构由 db/schema.sql 显式管理，应用不自动建表
+    open-in-view: false
+    properties:
+      hibernate:
+        jdbc.batch_size: 10
+
+  # 真实 Redis：连接/读取均为有限超时，失败时活动查询回源、报名不受影响。
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      timeout: 1s               # 命令/读取超时
+      connect-timeout: 1s       # 连接超时
+
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+
+app:
+  cache:
+    # 活动基础信息缓存 TTL，验证时可缩短（如 5 秒）
+    ttl-seconds: ${CACHE_TTL_SECONDS:120}
+
+logging:
+  level:
+    root: INFO
+    com.example.activity: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n"
