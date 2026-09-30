@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>限量活动报名系统</title>
+<style>
+  :root { --border:#e2e8f0; --accent:#2563eb; --ok:#16a34a; --err:#dc2626; --bg:#f8fafc; }
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, "Segoe UI", "Microsoft YaHei", sans-serif; background: var(--bg); color: #1e293b; margin: 0; padding: 24px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: #64748b; font-size: 13px; margin-bottom: 20px; }
+  .panel { background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+  .panel h2 { font-size: 15px; margin: 0 0 12px; }
+  .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+  input[type=text], input[type=number] { padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; }
+  button { padding: 8px 14px; border: 1px solid var(--border); border-radius: 6px; background: #fff; cursor: pointer; font-size: 13px; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  button.danger { background: var(--err); color: #fff; border-color: var(--err); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+  th { color: #64748b; font-weight: 600; }
+  .badge { padding: 2px 8px; border-radius: 999px; font-size: 12px; }
+  .badge.open { background: #dcfce7; color: var(--ok); }
+  .badge.closed { background: #fee2e2; color: var(--err); }
+  .remaining-zero { color: #94a3b8; }
+  #status { min-height: 40px; }
+  .msg { padding: 10px 12px; border-radius: 8px; margin: 8px 0; font-size: 13px; white-space: pre-wrap; word-break: break-all; }
+  .msg.ok { background: #dcfce7; color: var(--ok); }
+  .msg.err { background: #fee2e2; color: var(--err); }
+  .msg.info { background: #eff6ff; color: #1d4ed8; }
+  .muted { color: #94a3b8; font-size: 12px; }
+</style>
+</head>
+<body>
+  <h1>限量活动报名系统</h1>
+  <div class="sub">真实调用后端：展示活动与剩余名额、输入演示用户 ID、报名、查询「我的报名」。网络失败重试保留原 requestId。</div>
+
+  <div class="panel">
+    <h2>演示身份</h2>
+    <div class="row">
+      <label for="userId">用户 ID（X-User-Id，正整数）</label>
+      <input type="text" id="userId" value="1101" placeholder="例如 1101">
+      <button class="primary" onclick="refreshAll()">加载 / 刷新</button>
+      <span class="muted">登录系统不在本次范围，仅用于演示数据隔离</span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>活动列表 <span class="muted">（点击标题查看详情，可观察到 Redis 缓存命中/回源）</span></h2>
+    <table>
+      <thead><tr><th>ID</th><th>标题</th><th>状态</th><th>总名额</th><th>剩余名额</th><th>操作</th></tr></thead>
+      <tbody id="activityBody"><tr><td colspan="6" class="muted">加载中…</td></tr></tbody>
+    </table>
+  </div>
+
+  <div class="panel">
+    <h2>我的报名</h2>
+    <div class="row">
+      <button class="primary" onclick="loadMyRegistrations()">查询我的报名</button>
+      <span class="muted">仅返回当前 X-User-Id 的报名，按创建时间降序</span>
+    </div>
+    <table>
+      <thead><tr><th>报名ID</th><th>活动ID</th><th>requestId</th><th>状态</th><th>时间</th></tr></thead>
+      <tbody id="regBody"><tr><td colspan="5" class="muted">尚未查询</td></tr></tbody>
+    </table>
+  </div>
+
+  <div class="panel">
+    <h2>操作结果 <span class="muted">（错误也会在此展示，不只输出到控制台）</span></h2>
+    <div id="status"></div>
+  </div>
+
+<script>
+const API = '/api';
+let userId = () => document.getElementById('userId').value.trim();
+// 保存「最后一次网络失败」的报名意图，用于保留原 requestId 重试
+let retryIntent = null;
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function status(msg, kind) {
+  const el = document.getElementById('status');
+  const div = document.createElement('div');
+  div.className = 'msg ' + (kind || 'info');
+  div.textContent = msg;
+  el.prepend(div);
+}
+
+async function http(method, path, body, headers) {
+  const opts = { method, headers: { ...(headers || {}) } };
+  if (body !== undefined) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
+  const res = await fetch(API + path, opts);
+  let data = null;
+  try { data = await res.json(); } catch (e) { /* 非 JSON 响应 */ }
+  return { status: res.status, data };
+}
+
+function activityRow(a) {
+  const open = a.status === 'OPEN';
+  const badge = `<span class="badge ${open ? 'open' : 'closed'}">${esc(a.status)}</span>`;
+  const rem = a.remainingQuota <= 0 ? `<span class="remaining-zero">${a.remainingQuota}</span>` : a.remainingQuota;
+  const disabled = !open || a.remainingQuota <= 0;
+  return `<tr>
+    <td>${a.id}</td>
+    <td><a href="javascript:void(0)" onclick="viewDetail(${a.id})">${esc(a.title)}</a></td>
+    <td>${badge}</td>
+    <td>${a.totalQuota}</td>
+    <td>${rem}</td>
+    <td><button onclick="register(${a.id})" ${disabled ? 'disabled' : ''}>报名</button></td>
+  </tr>`;
+}
+
+async function loadActivities() {
+  const { status, data } = await http('GET', '/activities?page=1&size=100');
+  const body = document.getElementById('activityBody');
+  if (status !== 200 || !data || !data.data) { body.innerHTML = `<tr><td colspan="6" class="muted">加载失败</td></tr>`; return; }
+  const items = data.data.items || [];
+  body.innerHTML = items.length ? items.map(activityRow).join('') : `<tr><td colspan="6" class="muted">暂无活动</td></tr>`;
+}
+
+async function viewDetail(id) {
+  const { status, data } = await http('GET', '/activities/' + id);
+  if (status === 200 && data && data.data) {
+    const a = data.data;
+    status(`活动 ${a.id} 详情：${a.title} / ${a.status} / 剩余 ${a.remainingQuota}/${a.totalQuota}`, 'info');
+  } else {
+    status(`查看详情失败（HTTP ${status}）：${data?.code || ''} ${data?.message || ''}`, 'err');
+  }
+}
+
+async function register(activityId) {
+  const uid = userId();
+  if (!/^[1-9]\d*$/.test(uid)) { status('请先输入有效的用户 ID（正整数）', 'err'); return; }
+
+  // 新报名意图 → 生成新键；网络失败重试才复用旧键
+  const requestId = 'req_' + activityId + '_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+  await doRegister({ userId: uid, activityId, requestId });
+}
+
+async function doRegister(intent) {
+  status(`提交报名：activityId=${intent.activityId} requestId=${intent.requestId} …`, 'info');
+  try {
+    const { status, data } = await http('POST', '/registrations', { activityId: intent.activityId, requestId: intent.requestId }, { 'X-User-Id': intent.userId });
+    retryIntent = null; // 已得到响应，本次意图结束
+    if (status === 201) {
+      status(`报名成功（新建，HTTP 201）：报名ID=${data.data.id} requestId=${data.data.requestId}`, 'ok');
+    } else if (status === 200) {
+      status(`报名成功（重放，HTTP 200）：报名ID=${data.data.id} requestId=${data.data.requestId}`, 'ok');
+    } else {
+      status(`业务失败（HTTP ${status}）：code=${data?.code || ''} message=${data?.message || ''}`, 'err');
+    }
+    loadActivities();
+    loadMyRegistrations();
+  } catch (e) {
+    // 网络失败：保留原 requestId，供重试复用
+    retryIntent = intent;
+    status(`网络失败：${e.message}。已保留 requestId=${intent.requestId}，可点击下方「重试」复用同一键重试。`, 'err');
+    renderRetry();
+  }
+}
+
+function renderRetry() {
+  const el = document.getElementById('status');
+  if (!retryIntent) return;
+  const div = document.createElement('div');
+  div.className = 'msg err';
+  div.innerHTML = `<strong>上次报名因网络失败未完成</strong>：activityId=${esc(retryIntent.activityId)} requestId=${esc(retryIntent.requestId)}
+    <button class="danger" onclick="doRegister(retryIntent)">重试（复用原 requestId）</button>
+    <button onclick="retryIntent=null;renderRetry()">放弃（下次报名生成新键）</button>`;
+  el.prepend(div);
+}
+
+async function loadMyRegistrations() {
+  const uid = userId();
+  if (!/^[1-9]\d*$/.test(uid)) { status('请先输入有效的用户 ID（正整数）', 'err'); return; }
+  const { status, data } = await http('GET', '/registrations?page=1&size=100', undefined, { 'X-User-Id': uid });
+  const body = document.getElementById('regBody');
+  if (status !== 200 || !data || !data.data) {
+    body.innerHTML = `<tr><td colspan="5" class="muted">查询失败（HTTP ${status}）</td></tr>`;
+    return;
+  }
+  const items = data.data.items || [];
+  body.innerHTML = items.length
+    ? items.map(r => `<tr><td>${esc(r.id)}</td><td>${r.activityId}</td><td>${esc(r.requestId)}</td><td>${esc(r.status)}</td><td>${esc(r.createdAt)}</td></tr>`).join('')
+    : `<tr><td colspan="5" class="muted">该用户暂无报名记录</td></tr>`;
+}
+
+function refreshAll() {
+  loadActivities();
+  loadMyRegistrations();
+}
+
+// 初始加载
+loadActivities();
+</script>
+</body>
+</html>
