@@ -46,7 +46,7 @@
     <h2>演示身份</h2>
     <div class="row">
       <label for="userId">用户 ID（X-User-Id，正整数）</label>
-      <input type="text" id="userId" value="1101" placeholder="例如 1101" oninput="clearUidHint()">
+      <input type="text" id="userId" value="1101" placeholder="例如 1101" oninput="onUserChange()">
       <button class="primary" onclick="refreshAll()">加载 / 刷新</button>
       <span id="uidHint" class="hint muted">登录系统不在本次范围，仅用于演示数据隔离</span>
     </div>
@@ -90,7 +90,15 @@ function setUidHint(msg, kind) {
   el.textContent = msg;
   el.className = 'hint ' + (kind || 'muted');
 }
-function clearUidHint() { setUidHint('登录系统不在本次范围，仅用于演示数据隔离', 'muted'); }
+// 切换用户（用户 ID 变化）时：清空上一用户的报名列表与行内结果，避免残留
+function onUserChange() {
+  for (const k in rowResults) delete rowResults[k];
+  document.querySelectorAll('.act-result').forEach(c => { c.innerHTML = ''; c.className = 'act-result'; });
+  const reg = document.getElementById('regBody');
+  reg.innerHTML = `<tr><td colspan="5" class="muted">尚未查询</td></tr>`;
+  setRegHint('仅返回当前 X-User-Id 的报名，按创建时间降序', 'muted');
+  setUidHint('', '');
+}
 
 function setRegHint(msg, kind) {
   const el = document.getElementById('regHint');
