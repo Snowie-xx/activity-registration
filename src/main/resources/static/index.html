@@ -82,7 +82,7 @@ function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
-function status(msg, kind) {
+function notify(msg, kind) {
   const el = document.getElementById('status');
   const div = document.createElement('div');
   div.className = 'msg ' + (kind || 'info');
@@ -126,15 +126,15 @@ async function viewDetail(id) {
   const { status, data } = await http('GET', '/activities/' + id);
   if (status === 200 && data && data.data) {
     const a = data.data;
-    status(`活动 ${a.id} 详情：${a.title} / ${a.status} / 剩余 ${a.remainingQuota}/${a.totalQuota}`, 'info');
+    notify(`活动 ${a.id} 详情：${a.title} / ${a.status} / 剩余 ${a.remainingQuota}/${a.totalQuota}`, 'info');
   } else {
-    status(`查看详情失败（HTTP ${status}）：${data?.code || ''} ${data?.message || ''}`, 'err');
+    notify(`查看详情失败（HTTP ${status}）：${data?.code || ''} ${data?.message || ''}`, 'err');
   }
 }
 
 async function register(activityId) {
   const uid = userId();
-  if (!/^[1-9]\d*$/.test(uid)) { status('请先输入有效的用户 ID（正整数）', 'err'); return; }
+  if (!/^[1-9]\d*$/.test(uid)) { notify('请先输入有效的用户 ID（正整数）', 'err'); return; }
 
   // 新报名意图 → 生成新键；网络失败重试才复用旧键
   const requestId = 'req_' + activityId + '_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
@@ -142,23 +142,23 @@ async function register(activityId) {
 }
 
 async function doRegister(intent) {
-  status(`提交报名：activityId=${intent.activityId} requestId=${intent.requestId} …`, 'info');
+  notify(`提交报名：activityId=${intent.activityId} requestId=${intent.requestId} …`, 'info');
   try {
     const { status, data } = await http('POST', '/registrations', { activityId: intent.activityId, requestId: intent.requestId }, { 'X-User-Id': intent.userId });
     retryIntent = null; // 已得到响应，本次意图结束
     if (status === 201) {
-      status(`报名成功（新建，HTTP 201）：报名ID=${data.data.id} requestId=${data.data.requestId}`, 'ok');
+      notify(`报名成功（新建，HTTP 201）：报名ID=${data.data.id} requestId=${data.data.requestId}`, 'ok');
     } else if (status === 200) {
-      status(`报名成功（重放，HTTP 200）：报名ID=${data.data.id} requestId=${data.data.requestId}`, 'ok');
+      notify(`报名成功（重放，HTTP 200）：报名ID=${data.data.id} requestId=${data.data.requestId}`, 'ok');
     } else {
-      status(`业务失败（HTTP ${status}）：code=${data?.code || ''} message=${data?.message || ''}`, 'err');
+      notify(`业务失败（HTTP ${status}）：code=${data?.code || ''} message=${data?.message || ''}`, 'err');
     }
     loadActivities();
     loadMyRegistrations();
   } catch (e) {
     // 网络失败：保留原 requestId，供重试复用
     retryIntent = intent;
-    status(`网络失败：${e.message}。已保留 requestId=${intent.requestId}，可点击下方「重试」复用同一键重试。`, 'err');
+    notify(`网络失败：${e.message}。已保留 requestId=${intent.requestId}，可点击下方「重试」复用同一键重试。`, 'err');
     renderRetry();
   }
 }
@@ -176,7 +176,7 @@ function renderRetry() {
 
 async function loadMyRegistrations() {
   const uid = userId();
-  if (!/^[1-9]\d*$/.test(uid)) { status('请先输入有效的用户 ID（正整数）', 'err'); return; }
+  if (!/^[1-9]\d*$/.test(uid)) { notify('请先输入有效的用户 ID（正整数）', 'err'); return; }
   const { status, data } = await http('GET', '/registrations?page=1&size=100', undefined, { 'X-User-Id': uid });
   const body = document.getElementById('regBody');
   if (status !== 200 || !data || !data.data) {
